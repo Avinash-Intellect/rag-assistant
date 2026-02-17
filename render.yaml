@@ -11,8 +11,3 @@ services:
     envVars:
       - key: GEMINI_API_KEY
         sync: false
-
-    disk:
-      name: chroma-disk
-      mountPath: /opt/render/project/src/chroma_db
-      sizeGB: 1
