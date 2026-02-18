@@ -1,8 +1,9 @@
 from config import gemini_client, GEMINI_MODEL
+import time
 
 
 def augment_query(question, memory_context):
-
+    time.sleep(2)
     prompt = f"""
 You are assisting with a retrieval system.
 
