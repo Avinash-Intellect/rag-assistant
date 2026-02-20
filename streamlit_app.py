@@ -1,99 +1,136 @@
 import streamlit as st
+import requests
 import uuid
 import os
 
-from loader import load_documents
-from chunker import chunk_text
-from embedder import generate_embeddings
-from vector_store import store_embeddings
-from retriever import retrieve_context
-from generator import generate_answer
-from keyword_retriever import KeywordRetriever
+# ========================
+# Backend URLs
+# ========================
 
-# ---------- Streamlit Page Config ----------
+API_URL = "http://127.0.0.1:8000/ask-stream"
+UPLOAD_URL = "http://127.0.0.1:8000/upload-pdf"
+
+
+# ========================
+# Page Config
+# ========================
+
 st.set_page_config(
-    page_title="RAG Knowledge Assistant",
+    page_title="RAG Assistant",
     page_icon="📚",
     layout="wide"
 )
 
 st.title("📚 RAG Knowledge Assistant")
 
-# ---------- Session State ----------
+
+# ========================
+# Session Initialization
+# ========================
+
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "indexed_files" not in st.session_state:
-    st.session_state.indexed_files = set()
-
-if "keyword_retriever" not in st.session_state:
-    st.session_state.keyword_retriever = None
+if "selected_pdf" not in st.session_state:
+    st.session_state.selected_pdf = None
 
 
-# ---------- PDF Upload ----------
+# ========================
+# Sidebar Upload
+# ========================
+
+st.sidebar.header("📂 Document Manager")
+
+# Initialize uploaded files tracker
+if "uploaded_files" not in st.session_state:
+    st.session_state.uploaded_files = set()
+
+
 uploaded_file = st.sidebar.file_uploader(
     "Upload PDF",
     type=["pdf"]
 )
 
-if uploaded_file is not None:
+if uploaded_file:
 
-    filename = uploaded_file.name
-    filepath = os.path.join("data", filename)
+    # Upload only if not already uploaded
+    if uploaded_file.name not in st.session_state.uploaded_files:
 
-    if filename not in st.session_state.indexed_files:
+        try:
 
-        os.makedirs("data", exist_ok=True)
+            upload_response = requests.post(
+                UPLOAD_URL,
+                files={"file": (uploaded_file.name, uploaded_file.getvalue())}
+            )
 
-        with open(filepath, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+            if upload_response.status_code == 200:
 
-        st.sidebar.info("Indexing document...")
+                st.sidebar.success(f"{uploaded_file.name} uploaded & indexed")
 
-        docs = load_documents(filepath)
-        chunks = chunk_text(docs)
+                # Mark as uploaded
+                st.session_state.uploaded_files.add(uploaded_file.name)
 
-        embeddings = generate_embeddings(chunks)
-        store_embeddings(chunks, embeddings, filename)
+            else:
 
-        st.session_state.keyword_retriever = KeywordRetriever(chunks)
+                st.sidebar.error(upload_response.text)
 
-        st.session_state.indexed_files.add(filename)
+        except Exception as e:
 
-        st.sidebar.success("Document indexed successfully!")
-
-    else:
-        st.sidebar.info("Document already indexed.")
+            st.sidebar.error(f"Upload failed: {e}")
 
 
-# ---------- Select PDF ----------
-pdf_files = os.listdir("data") if os.path.exists("data") else []
 
-selected_pdf = None
+# ========================
+# Sidebar PDF Selector
+# ========================
+
+pdf_files = []
+
+if os.path.exists("data"):
+    pdf_files = [f for f in os.listdir("data") if f.endswith(".pdf")]
 
 if pdf_files:
-    selected_pdf = st.sidebar.selectbox(
-        "Select Document",
-        pdf_files
+
+    st.session_state.selected_pdf = st.sidebar.selectbox(
+        "Select PDF",
+        pdf_files,
+        index=pdf_files.index(st.session_state.selected_pdf)
+        if st.session_state.selected_pdf in pdf_files else 0
     )
 
+else:
 
-# ---------- Display Chat History ----------
+    st.sidebar.warning("Upload a PDF first")
+
+
+# ========================
+# Display Chat History
+# ========================
+
 for msg in st.session_state.messages:
 
     with st.chat_message(msg["role"]):
-        st.write(msg["content"])
+
+        # CRITICAL FIX: use markdown instead of write
+        st.markdown(msg["content"], unsafe_allow_html=True)
 
 
-# ---------- Chat Input ----------
-if prompt := st.chat_input("Ask a question..."):
+# ========================
+# Chat Input
+# ========================
 
-    if selected_pdf is None:
-        st.warning("Please upload and select a document first.")
+prompt = st.chat_input("Ask a question...")
+
+if prompt:
+
+    if not st.session_state.selected_pdf:
+
+        st.error("Please upload and select a PDF first")
         st.stop()
+
 
     # Show user message
     st.session_state.messages.append({
@@ -102,30 +139,63 @@ if prompt := st.chat_input("Ask a question..."):
     })
 
     with st.chat_message("user"):
-        st.write(prompt)
+        st.markdown(prompt)
 
-    # Retrieve context
-    result = retrieve_context(
-        prompt,
-        st.session_state.keyword_retriever,
-        selected_pdf
-    )
 
-    if result is None:
+    payload = {
+        "question": prompt,
+        "session_id": st.session_state.session_id,
+        "pdf_name": st.session_state.selected_pdf
+    }
 
-        answer = "I could not find relevant information in the document."
-
-    else:
-
-        context = result["context"]
-
-        answer = generate_answer(prompt, context)
-
-    # Show assistant message
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": answer
-    })
 
     with st.chat_message("assistant"):
-        st.write(answer)
+
+        placeholder = st.empty()
+
+        full_response = ""
+
+        try:
+
+            response = requests.post(
+                API_URL,
+                json=payload,
+                stream=True,
+                timeout=120
+            )
+
+            if response.status_code != 200:
+
+                full_response = f"Backend error: {response.text}"
+
+                placeholder.markdown(full_response)
+
+            else:
+
+                # Stream response properly
+                for chunk in response.iter_content(chunk_size=512):
+
+                    if chunk:
+
+                        text = chunk.decode("utf-8")
+
+                        full_response += text
+
+                        # FIX: Proper markdown rendering
+                        placeholder.markdown(
+                            full_response,
+                            unsafe_allow_html=True
+                        )
+
+        except Exception as e:
+
+            full_response = f"Connection error: {e}"
+
+            placeholder.markdown(full_response)
+
+
+    # Save assistant response
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": full_response
+    })
