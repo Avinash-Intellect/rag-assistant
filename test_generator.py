@@ -1,22 +1,15 @@
-from retriever import retrieve_context
-from generator import generate_answer
+from config import gemini_client
 
-question = "Explain binary search"
+print("Fetching available models...")
 
-context = retrieve_context(question)
+# In the new SDK, just list them. 
+# The 'supported_generation_methods' check is often not needed for a simple list,
+# or the attribute name is different (e.g., 'supported_actions' in some versions).
 
-answer = generate_answer(question, context)
-
-print(answer)
-# from google import genai
-# import os
-# from dotenv import load_dotenv
-
-# load_dotenv()
-
-# client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-# models = client.models.list()
-
-# for model in models:
-#     print(model.name)
+try:
+    for model in gemini_client.models.list():
+        # print(model) # Uncomment this if you want to see all properties
+        print(f"- {model.name}")
+        
+except Exception as e:
+    print(f"Error listing models: {e}")
